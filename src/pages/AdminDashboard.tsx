@@ -116,7 +116,7 @@ type OverspeedRecord = {
 };
 
 // ✅ Keep this configurable (prod-ready)
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || 'http://localhost:3000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3000';
 const WS_URL = `${API_BASE}/ws`;
 
 const styles = {
