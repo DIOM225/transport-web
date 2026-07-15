@@ -116,7 +116,7 @@ type OverspeedRecord = {
 };
 
 // ✅ Keep this configurable (prod-ready)
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'https://transport-api-production-d0c6.up.railway.app';
 const WS_URL = `${API_BASE}/ws`;
 
 const styles = {
