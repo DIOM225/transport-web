@@ -9,9 +9,8 @@ export type User = {
 const TOKEN_KEY = 'transport_token';
 const USER_KEY = 'transport_user';
 
-// Use Vite env when you deploy; fallback to local Nest default.
 const API_BASE =
-  (import.meta as any).env?.VITE_API_URL?.toString() || 'http://localhost:3000';
+  import.meta.env.VITE_API_BASE || 'https://transport-api-production-d0c6.up.railway.app';
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);

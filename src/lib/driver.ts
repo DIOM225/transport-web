@@ -1,7 +1,7 @@
 import { getToken } from './auth';
 
 const API_BASE =
-  (import.meta as any).env?.VITE_API_URL?.toString() || 'http://localhost:3000';
+  import.meta.env.VITE_API_BASE || 'https://transport-api-production-d0c6.up.railway.app';
 
 type SendPositionPayload = {
   lat: number;

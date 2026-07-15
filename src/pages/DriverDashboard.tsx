@@ -3,6 +3,9 @@ import { io, Socket } from 'socket.io-client';
 import { getToken } from '../lib/auth';
 import { sendPosition } from '../lib/driver';
 
+const API_BASE =
+  import.meta.env.VITE_API_BASE || 'https://transport-api-production-d0c6.up.railway.app';
+
 type DriverStatus = 'OFFLINE' | 'ONLINE';
 
 type GeoState = {
@@ -164,7 +167,7 @@ export default function DriverDashboard() {
     }
 
     // Nest gateway uses namespace '/ws'
-    const socket = io('http://localhost:3000/ws', {
+    const socket = io(`${API_BASE}/ws`, {
       auth: { token },
       transports: ['polling', 'websocket'],
       withCredentials: true,
