@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { getToken } from '../lib/auth';
+import { getToken, clearSession } from '../lib/auth';
 
 import Map, { Marker, Popup, type MapRef } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -1637,6 +1637,13 @@ export default function AdminDashboard() {
           <div style={styles.chip('#f3f4f6', '#374151')}>
             API: <span style={{ ...styles.mono, fontWeight: 950 }}>{API_BASE}</span>
           </div>
+
+          <button
+            onClick={() => { clearSession(); window.location.href = '/login'; }}
+            style={{ padding: '6px 12px', borderRadius: 10, border: '1px solid #e5e7eb', background: '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer', color: '#374151' }}
+          >
+            Déconnexion
+          </button>
         </div>
       </div>
 
