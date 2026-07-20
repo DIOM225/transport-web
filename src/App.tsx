@@ -7,6 +7,7 @@ import Landing from './pages/Landing';
 import Login from './pages/Login';
 import DriverDashboard from './pages/DriverDashboard';
 import AdminDashboard from './pages/AdminDashboard';
+import SuperAdminDashboard from './pages/SuperAdminDashboard';
 
 export default function App() {
   return (
@@ -26,6 +27,8 @@ export default function App() {
             <Route element={<RequireRole allow={['ADMIN', 'OPERATOR']} />}>
               <Route path="/admin" element={<AdminDashboard />} />
             </Route>
+
+            <Route path="/superadmin" element={<SuperAdminDashboard />} />
           </Route>
 
           {/* Fallback */}

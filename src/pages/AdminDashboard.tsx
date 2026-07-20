@@ -9,6 +9,9 @@ type UserRole = 'ADMIN' | 'OPERATOR' | 'DRIVER';
 type FleetStatus = 'ONLINE' | 'STALE' | 'OFFLINE';
 type MotionStatus = 'MOVING' | 'IDLE';
 
+const STALE_AFTER_MS  = 2  * 60_000; // 2 min silence → amber badge
+const OFFLINE_AFTER_MS = 10 * 60_000; // 10 min silence → red / offline
+
 type FleetPosition = {
   userId: string;
   phone?: string;
@@ -103,6 +106,8 @@ type Trip = {
   createdAt: string;
 };
 
+type OverspeedSeverity = 'MILD' | 'MODERATE' | 'SEVERE';
+
 type OverspeedRecord = {
   id: string;
   userId: string;
@@ -113,6 +118,7 @@ type OverspeedRecord = {
   tripId: string | null;
   acknowledged: boolean;
   detectedAt: string;
+  severity?: OverspeedSeverity;
 };
 
 // ✅ Keep this configurable (prod-ready)
@@ -535,6 +541,12 @@ function normalizeFleetRow(r: any): FleetPosition | null {
   };
 }
 
+function severityColors(s?: OverspeedSeverity): { bg: string; border: string; text: string; left: string } {
+  if (s === 'SEVERE')   return { bg: '#fee2e2', border: '#fca5a5', text: '#991b1b', left: '#ef4444' };
+  if (s === 'MODERATE') return { bg: '#fff7ed', border: '#fed7aa', text: '#9a3412', left: '#f97316' };
+  return                       { bg: '#fefce8', border: '#fde68a', text: '#854d0e', left: '#eab308' };
+}
+
 function markerDot(status: FleetStatus, selected: boolean): React.CSSProperties {
   const color = status === 'ONLINE' ? '#16a34a' : status === 'STALE' ? '#f59e0b' : '#ef4444';
   const size = selected ? 18 : 14;
@@ -945,6 +957,7 @@ export default function AdminDashboard() {
     limitKmh: number;
     detectedAt: number;
     tripId?: string | null;
+    severity?: OverspeedSeverity;
   };
   const [overspeedAlerts, setOverspeedAlerts] = useState<OverspeedAlert[]>([]);
 
@@ -1064,12 +1077,6 @@ export default function AdminDashboard() {
   const vehicles = useMemo(() => {
     const list = Object.values(fleet);
 
-    // If backend status missing (old server), fallback to conservative computation
-    // INACTIF after 3 min silence (spotty coverage on rural roads is normal)
-    // HORS LIGNE after 10 min — driver is truly disconnected
-    const STALE_AFTER_MS = 3 * 60_000;
-    const OFFLINE_AFTER_MS = 10 * 60_000;
-
     const normalized = list.map((p) => {
       const lastSeenAt = p.lastSeenAt ?? p.timestamp ?? 0;
       const ageMs = now - lastSeenAt;
@@ -1109,7 +1116,7 @@ export default function AdminDashboard() {
 
       const fleetStatus: FleetStatus =
         p.fleetStatus ??
-        (ageMs <= 3 * 60_000 ? 'ONLINE' : ageMs <= 10 * 60_000 ? 'STALE' : 'OFFLINE');
+        (ageMs <= STALE_AFTER_MS ? 'ONLINE' : ageMs <= OFFLINE_AFTER_MS ? 'STALE' : 'OFFLINE');
 
       return fleetStatus;
     });
@@ -1667,23 +1674,29 @@ export default function AdminDashboard() {
       {/* Overspeed alerts */}
       {overspeedAlerts.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
-          {overspeedAlerts.map((a) => (
-            <div key={a.id} style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-              padding: '7px 12px', borderRadius: 10, border: '1px solid #fca5a5',
-              background: '#fee2e2', fontSize: 12, fontWeight: 900, color: '#991b1b',
-            }}>
-              <span>
-                ⚠ EXCÈS DE VITESSE · <span style={styles.mono}>{a.phone}</span>
-                {' '}· {a.speedKmh} km/h (limite {a.limitKmh} km/h)
-                {' '}· {new Date(a.detectedAt).toLocaleTimeString()}
-              </span>
-              <button onClick={() => dismissOverspeed(a.id)} style={{
-                background: 'none', border: 'none', cursor: 'pointer',
-                color: '#991b1b', fontWeight: 950, fontSize: 14, lineHeight: 1, padding: '0 4px',
-              }}>✕</button>
-            </div>
-          ))}
+          {overspeedAlerts.map((a) => {
+            const sc = severityColors(a.severity);
+            return (
+              <div key={a.id} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                padding: '7px 12px', borderRadius: 10,
+                border: `1px solid ${sc.border}`,
+                background: sc.bg, fontSize: 12, fontWeight: 900, color: sc.text,
+                borderLeft: `4px solid ${sc.left}`,
+              }}>
+                <span>
+                  {a.severity === 'SEVERE' ? '🔴' : a.severity === 'MODERATE' ? '🟠' : '🟡'}{' '}
+                  EXCÈS · <span style={styles.mono}>{a.phone}</span>
+                  {' '}· {Math.round(a.speedKmh)} km/h (limite {a.limitKmh} km/h)
+                  {' '}· {new Date(a.detectedAt).toLocaleTimeString()}
+                </span>
+                <button onClick={() => dismissOverspeed(a.id)} style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: sc.text, fontWeight: 950, fontSize: 14, lineHeight: 1, padding: '0 4px',
+                }}>✕</button>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -1773,6 +1786,21 @@ export default function AdminDashboard() {
                           </div>
                         )}
                         <div style={markerDot(status, isSelected)} />
+                        {status !== 'ONLINE' && v.ageMs !== undefined && (
+                          <div style={{
+                            marginTop: 3,
+                            background: status === 'OFFLINE' ? '#ef4444' : '#f59e0b',
+                            color: '#fff',
+                            fontSize: 9,
+                            fontWeight: 700,
+                            padding: '1px 4px',
+                            borderRadius: 4,
+                            whiteSpace: 'nowrap',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                          }}>
+                            {formatAge(v.ageMs)}
+                          </div>
+                        )}
                       </div>
                     </Marker>
                   );
@@ -1992,22 +2020,27 @@ export default function AdminDashboard() {
                         {b.isActive ? 'Désactiver' : 'Activer'}
                       </button>
                       <button style={styles.btn('ghost')} onClick={() => { setPinBusId(pinBusId === b.id ? null : b.id); setPinValue(''); }}>
-                        {pinBusId === b.id ? 'Annuler' : 'PIN tablette'}
+                        {pinBusId === b.id ? 'Annuler' : 'Changer de tablette'}
                       </button>
                     </div>
                     {pinBusId === b.id && (
-                      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                        <input
-                          style={{ ...styles.input, flex: 1 }}
-                          placeholder="Nouveau PIN (≥4 chiffres)"
-                          value={pinValue}
-                          onChange={(e) => setPinValue(e.target.value)}
-                          inputMode="numeric"
-                          maxLength={8}
-                        />
-                        <button style={styles.btn('primary')} onClick={() => onSetDevicePin(b.id)} disabled={pinLoading || pinValue.trim().length < 4}>
-                          {pinLoading ? '…' : 'Enregistrer'}
-                        </button>
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{ ...styles.small, marginBottom: 6, color: '#6b7280' }}>
+                          Entrez un nouveau code — l'ancienne tablette sera bloquée dès la prochaine tentative de connexion.
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <input
+                            style={{ ...styles.input, flex: 1 }}
+                            placeholder="Nouveau code (≥4 chiffres)"
+                            value={pinValue}
+                            onChange={(e) => setPinValue(e.target.value)}
+                            inputMode="numeric"
+                            maxLength={8}
+                          />
+                          <button style={styles.btn('primary')} onClick={() => onSetDevicePin(b.id)} disabled={pinLoading || pinValue.trim().length < 4}>
+                            {pinLoading ? '…' : 'Confirmer'}
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -2287,31 +2320,35 @@ export default function AdminDashboard() {
                   <div style={{ ...styles.small, padding: 12, border: '1px dashed #e5e7eb', borderRadius: 14, textAlign: 'center' }}>
                     Aucun excès enregistré.
                   </div>
-                ) : overspeedRecords.map((a) => (
-                  <div key={a.id} style={{
-                    ...styles.userRow,
-                    opacity: a.acknowledged ? 0.5 : 1,
-                    borderLeft: a.acknowledged ? '3px solid #d1d5db' : '3px solid #ef4444',
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                      <div>
-                        <div style={{ fontWeight: 900, fontSize: 13, color: '#111827' }}>
-                          {a.label} · <span style={{ color: '#dc2626' }}>{Math.round(a.speedKmh)} km/h</span>
-                          <span style={{ color: '#6b7280', fontWeight: 700 }}> (limite {a.limitKmh} km/h)</span>
+                ) : overspeedRecords.map((a) => {
+                  const sc = severityColors(a.severity);
+                  return (
+                    <div key={a.id} style={{
+                      ...styles.userRow,
+                      opacity: a.acknowledged ? 0.5 : 1,
+                      borderLeft: a.acknowledged ? '3px solid #d1d5db' : `3px solid ${sc.left}`,
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                        <div>
+                          <div style={{ fontWeight: 900, fontSize: 13, color: '#111827' }}>
+                            {a.severity === 'SEVERE' ? '🔴' : a.severity === 'MODERATE' ? '🟠' : '🟡'}{' '}
+                            {a.label} · <span style={{ color: sc.left }}>{Math.round(a.speedKmh)} km/h</span>
+                            <span style={{ color: '#6b7280', fontWeight: 700 }}> (limite {a.limitKmh} km/h)</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 700, marginTop: 2 }}>
+                            {new Date(a.detectedAt).toLocaleString('fr-FR')} · {Math.round(a.durationMs / 1000)}s en excès
+                          </div>
                         </div>
-                        <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 700, marginTop: 2 }}>
-                          {new Date(a.detectedAt).toLocaleString('fr-FR')} · {Math.round(a.durationMs / 1000)}s en excès
-                        </div>
+                        {!a.acknowledged && (
+                          <button
+                            onClick={() => acknowledgeAlert(a.id)}
+                            style={{ background: '#111827', color: '#fff', border: 'none', borderRadius: 8, padding: '4px 10px', fontWeight: 800, fontSize: 12, cursor: 'pointer' }}
+                          >✓</button>
+                        )}
                       </div>
-                      {!a.acknowledged && (
-                        <button
-                          onClick={() => acknowledgeAlert(a.id)}
-                          style={{ background: '#111827', color: '#fff', border: 'none', borderRadius: 8, padding: '4px 10px', fontWeight: 800, fontSize: 12, cursor: 'pointer' }}
-                        >✓</button>
-                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
 
