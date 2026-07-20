@@ -13,6 +13,9 @@ type MotionStatus = 'MOVING' | 'IDLE';
 const STALE_AFTER_MS  = 2  * 60_000; // 2 min silence → amber badge
 const OFFLINE_AFTER_MS = 10 * 60_000; // 10 min silence → red / offline
 
+const STALE_MS = 2 * 60 * 60 * 1000;       // 2 hours — remove from map
+const CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes — cleanup check interval
+
 type FleetPosition = {
   userId: string;
   phone?: string;
@@ -1014,6 +1017,39 @@ export default function AdminDashboard() {
     socket.io.on('reconnect', () => {
       setWsStatus('ON');
       setWsError(null);
+      // Re-seed map after reconnect so stale dots are replaced with fresh data
+      const tok = getToken();
+      if (tok) {
+        fetch(`${API_BASE}/positions/live`, {
+          headers: { Authorization: `Bearer ${tok}` },
+        })
+          .then((r) => r.json())
+          .then((liveBuses: any[]) => {
+            if (!Array.isArray(liveBuses)) return;
+            setFleet((prev) => {
+              const next = { ...prev };
+              for (const bus of liveBuses) {
+                if (!bus.busId || !Number.isFinite(Number(bus.lat)) || !Number.isFinite(Number(bus.lng))) continue;
+                const lastSeenAt = Date.parse(bus.lastSeenAt);
+                if (!Number.isFinite(lastSeenAt)) continue;
+                const existing = next[bus.busId];
+                if (existing && (existing.lastSeenAt ?? 0) >= lastSeenAt) continue;
+                next[bus.busId] = {
+                  userId: bus.busId,
+                  lat: Number(bus.lat),
+                  lng: Number(bus.lng),
+                  accuracyM: 0,
+                  speedKmh: bus.speedKmh ?? null,
+                  headingDeg: bus.headingDeg ?? null,
+                  lastSeenAt,
+                  busId: bus.busId,
+                };
+              }
+              return next;
+            });
+          })
+          .catch(() => {});
+      }
     });
 
     socket.io.on('reconnect_error', () => {
@@ -1042,7 +1078,7 @@ export default function AdminDashboard() {
     socket.on('fleet:position', (p: any) => {
       const n = normalizeFleetRow(p);
       if (!n) return;
-      setFleet((prev) => ({ ...prev, [n.userId]: n }));
+      setFleet((prev) => ({ ...prev, [n.userId]: { ...n, lastSeenAt: Date.now() } }));
     });
 
     socket.on('fleet:status', (rows: Array<any>) => {
@@ -1081,6 +1117,58 @@ export default function AdminDashboard() {
       socket.disconnect();
       socketRef.current = null;
     };
+  }, []);
+
+  // Seed the map from /positions/live on mount
+  useEffect(() => {
+    const tok = getToken();
+    if (!tok) return;
+    fetch(`${API_BASE}/positions/live`, {
+      headers: { Authorization: `Bearer ${tok}` },
+    })
+      .then((r) => r.json())
+      .then((liveBuses: any[]) => {
+        if (!Array.isArray(liveBuses)) return;
+        setFleet((prev) => {
+          const next = { ...prev };
+          for (const bus of liveBuses) {
+            if (!bus.busId || !Number.isFinite(Number(bus.lat)) || !Number.isFinite(Number(bus.lng))) continue;
+            const lastSeenAt = Date.parse(bus.lastSeenAt);
+            if (!Number.isFinite(lastSeenAt)) continue;
+            const existing = next[bus.busId];
+            if (existing && (existing.lastSeenAt ?? 0) >= lastSeenAt) continue;
+            next[bus.busId] = {
+              userId: bus.busId,
+              lat: Number(bus.lat),
+              lng: Number(bus.lng),
+              accuracyM: 0,
+              speedKmh: bus.speedKmh ?? null,
+              headingDeg: bus.headingDeg ?? null,
+              lastSeenAt,
+              busId: bus.busId,
+            };
+          }
+          return next;
+        });
+      })
+      .catch(() => {}); // silent fail — WebSocket will fill in anyway
+  }, []);
+
+  // Remove buses that haven't sent a position in 2 hours; check every 30 minutes
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const cutoff = Date.now() - STALE_MS;
+      setFleet((prev) => {
+        const next: Record<string, FleetPosition> = {};
+        for (const [id, pos] of Object.entries(prev)) {
+          if ((pos.lastSeenAt ?? 0) >= cutoff) {
+            next[id] = pos;
+          }
+        }
+        return next;
+      });
+    }, CLEANUP_INTERVAL_MS);
+    return () => clearInterval(interval);
   }, []);
 
   const vehicles = useMemo(() => {
