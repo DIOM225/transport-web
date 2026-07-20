@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { getToken, getUser } from '../lib/auth';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type OrgPlan = 'FREE' | 'STARTER' | 'GROWTH' | 'PRO';
+const PLANS: OrgPlan[] = ['FREE', 'STARTER', 'GROWTH', 'PRO'];
 
 type Organization = {
   id: string;
@@ -13,19 +14,18 @@ type Organization = {
   plan: OrgPlan;
   isActive: boolean;
   createdAt: string;
+  alertPhone?: string | null;
+  alertsEnabled?: boolean;
 };
 
-type OrgStats = {
-  busCount: number;
-  userCount: number;
-};
-
+type OrgStats = { busCount: number; userCount: number };
 type OrgWithStats = Organization & OrgStats;
 
 type PlatformStats = {
   orgCount: number;
   busCount: number;
   userCount: number;
+  tripsToday?: number;
 };
 
 type CreateTenantForm = {
@@ -38,15 +38,32 @@ type CreateTenantForm = {
   adminPin: string;
 };
 
-// ─── API helper (same pattern as AdminDashboard) ──────────────────────────────
+type Bus = { id: string; number?: string; plate?: string; isActive: boolean };
+type OrgUser = {
+  id: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  role?: string;
+};
+type Route = { id: string; name?: string };
+
+type OrgDetail = {
+  org: Organization;
+  buses: Bus[];
+  users: OrgUser[];
+  routes: Route[];
+  activeTrips: number;
+  tripsLast7Days: number;
+};
+
+// ─── API helper ───────────────────────────────────────────────────────────────
 
 const API_BASE =
   import.meta.env.VITE_API_BASE || 'https://transport-api-production-d0c6.up.railway.app';
 
-async function api<T>(
-  path: string,
-  opts: { method?: string; token: string; body?: any },
-): Promise<T> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function api<T>(path: string, opts: { method?: string; token: string; body?: any }): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: opts.method ?? 'GET',
     headers: {
@@ -55,7 +72,8 @@ async function api<T>(
     },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
-  const data = await res.json().catch(() => null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data: any = await res.json().catch(() => null);
   if (!res.ok) {
     const msg = data?.message || data?.error || `HTTP ${res.status}`;
     throw new Error(String(msg));
@@ -63,7 +81,7 @@ async function api<T>(
   return data as T;
 }
 
-// ─── Slug generator ───────────────────────────────────────────────────────────
+// ─── Utilities ────────────────────────────────────────────────────────────────
 
 function toSlug(name: string): string {
   return name
@@ -72,28 +90,30 @@ function toSlug(name: string): string {
     .replace(/^-|-$/g, '');
 }
 
-// ─── Plan badge ───────────────────────────────────────────────────────────────
+const PLAN_COLORS: Record<OrgPlan, { bg: string; fg: string }> = {
+  FREE:    { bg: '#f3f4f6', fg: '#6b7280' },
+  STARTER: { bg: '#dbeafe', fg: '#1d4ed8' },
+  GROWTH:  { bg: '#dcfce7', fg: '#16a34a' },
+  PRO:     { bg: '#ede9fe', fg: '#7c3aed' },
+};
 
-function planBadge(plan: OrgPlan): React.CSSProperties {
-  const map: Record<OrgPlan, { bg: string; fg: string }> = {
-    FREE:    { bg: '#f3f4f6', fg: '#6b7280' },
-    STARTER: { bg: '#dbeafe', fg: '#1d4ed8' },
-    GROWTH:  { bg: '#dcfce7', fg: '#16a34a' },
-    PRO:     { bg: '#ede9fe', fg: '#7c3aed' },
-  };
-  const { bg, fg } = map[plan] ?? map.FREE;
+function planSelectStyle(plan: OrgPlan): React.CSSProperties {
+  const { bg, fg } = PLAN_COLORS[plan] ?? PLAN_COLORS.FREE;
   return {
-    display: 'inline-block',
-    padding: '2px 8px',
-    borderRadius: 8,
-    fontSize: 11,
-    fontWeight: 800,
     background: bg,
     color: fg,
+    border: '1.5px solid transparent',
+    borderRadius: 8,
+    padding: '3px 6px',
+    fontSize: 11,
+    fontWeight: 800,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    outline: 'none',
   };
 }
 
-function statusBadge(isActive: boolean): React.CSSProperties {
+function statusBadgeStyle(isActive: boolean): React.CSSProperties {
   return {
     display: 'inline-block',
     padding: '2px 8px',
@@ -115,9 +135,7 @@ const S = {
     fontFamily: 'system-ui, sans-serif',
   } as React.CSSProperties,
 
-  header: {
-    marginBottom: 24,
-  } as React.CSSProperties,
+  header: { marginBottom: 24 } as React.CSSProperties,
 
   h1: {
     margin: 0,
@@ -127,15 +145,9 @@ const S = {
     letterSpacing: -0.3,
   } as React.CSSProperties,
 
-  sub: {
-    margin: '4px 0 0',
-    fontSize: 12,
-    color: '#6b7280',
-  } as React.CSSProperties,
+  sub: { margin: '4px 0 0', fontSize: 12, color: '#6b7280' } as React.CSSProperties,
 
-  section: {
-    marginBottom: 24,
-  } as React.CSSProperties,
+  section: { marginBottom: 24 } as React.CSSProperties,
 
   sectionTitle: {
     margin: '0 0 12px',
@@ -155,7 +167,7 @@ const S = {
 
   statsRow: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(3, 1fr)',
+    gridTemplateColumns: 'repeat(4, 1fr)',
     gap: 12,
     marginBottom: 24,
   } as React.CSSProperties,
@@ -197,11 +209,7 @@ const S = {
     gap: 4,
   } as React.CSSProperties,
 
-  label: {
-    fontSize: 11,
-    fontWeight: 800,
-    color: '#374151',
-  } as React.CSSProperties,
+  label: { fontSize: 11, fontWeight: 800, color: '#374151' } as React.CSSProperties,
 
   input: {
     border: '1.5px solid #e5e7eb',
@@ -230,11 +238,12 @@ const S = {
     background: 'transparent',
     border: '1.5px solid #e5e7eb',
     borderRadius: 10,
-    padding: '6px 12px',
+    padding: '5px 9px',
     fontWeight: 700,
     fontSize: 12,
     cursor: 'pointer',
     fontFamily: 'inherit',
+    color: '#374151',
   } as React.CSSProperties,
 
   btnDanger: {
@@ -242,7 +251,7 @@ const S = {
     color: '#fff',
     border: 'none',
     borderRadius: 10,
-    padding: '6px 12px',
+    padding: '5px 9px',
     fontWeight: 700,
     fontSize: 12,
     cursor: 'pointer',
@@ -272,10 +281,7 @@ const S = {
     verticalAlign: 'middle' as const,
   } as React.CSSProperties,
 
-  smallText: {
-    fontSize: 12,
-    color: '#6b7280',
-  } as React.CSSProperties,
+  smallText: { fontSize: 12, color: '#6b7280' } as React.CSSProperties,
 
   errorBox: {
     background: '#fef2f2',
@@ -287,6 +293,12 @@ const S = {
     marginTop: 8,
   } as React.CSSProperties,
 
+  inlineError: {
+    fontSize: 11,
+    color: '#dc2626',
+    marginTop: 4,
+  } as React.CSSProperties,
+
   successBox: {
     background: '#f0fdf4',
     border: '1px solid #bbf7d0',
@@ -296,9 +308,456 @@ const S = {
     color: '#16a34a',
     marginTop: 8,
   } as React.CSSProperties,
+
+  expandPanel: {
+    padding: '14px 16px',
+    background: '#f9fafb',
+    borderBottom: '1px solid #e5e7eb',
+  } as React.CSSProperties,
 };
 
-// ─── Component ────────────────────────────────────────────────────────────────
+// ─── OrgRow ───────────────────────────────────────────────────────────────────
+
+interface OrgRowProps {
+  org: OrgWithStats;
+  token: string;
+  colCount: number;
+  onUpdate: (id: string, patch: Partial<OrgWithStats>) => void;
+  onDelete: (id: string) => void;
+  isDetailOpen: boolean;
+  onToggleDetail: () => void;
+}
+
+function OrgRow({ org, token, colCount, onUpdate, onDelete, isDetailOpen, onToggleDetail }: OrgRowProps) {
+  // Plan
+  const [plan, setPlan] = useState<OrgPlan>(org.plan);
+  const [planBusy, setPlanBusy] = useState(false);
+  const [planConfirm, setPlanConfirm] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const planTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Toggle active
+  const [toggleBusy, setToggleBusy] = useState(false);
+
+  // Alerts SMS
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  const [alertPhone, setAlertPhone] = useState(org.alertPhone ?? '');
+  const [alertsEnabled, setAlertsEnabled] = useState(org.alertsEnabled ?? false);
+  const [alertsBusy, setAlertsBusy] = useState(false);
+  const [alertsError, setAlertsError] = useState<string | null>(null);
+  const [alertsSuccess, setAlertsSuccess] = useState(false);
+
+  // Edit
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState(org.name);
+  const [editEmail, setEditEmail] = useState(org.email ?? '');
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Detail
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailData, setDetailData] = useState<OrgDetail | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const detailFetched = useRef(false);
+
+  // Delete
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // ── Handlers ────────────────────────────────────────────────────────────────
+
+  async function handlePlanChange(newPlan: OrgPlan) {
+    if (newPlan === plan || planBusy) return;
+    const prev = plan;
+    setPlan(newPlan);
+    setPlanBusy(true);
+    setPlanError(null);
+    try {
+      await api<Organization>(`/organizations/${org.id}`, {
+        token,
+        method: 'PATCH',
+        body: { plan: newPlan },
+      });
+      onUpdate(org.id, { plan: newPlan });
+      setPlanConfirm(true);
+      if (planTimerRef.current) clearTimeout(planTimerRef.current);
+      planTimerRef.current = setTimeout(() => setPlanConfirm(false), 2000);
+    } catch (e) {
+      setPlanError((e as Error).message);
+      setPlan(prev);
+    } finally {
+      setPlanBusy(false);
+    }
+  }
+
+  async function handleToggleActive() {
+    setToggleBusy(true);
+    try {
+      await api<Organization>(`/organizations/${org.id}`, {
+        token,
+        method: 'PATCH',
+        body: { isActive: !org.isActive },
+      });
+      onUpdate(org.id, { isActive: !org.isActive });
+    } catch {
+      // silent — toggle is non-critical
+    } finally {
+      setToggleBusy(false);
+    }
+  }
+
+  async function handleAlertsSave() {
+    setAlertsBusy(true);
+    setAlertsError(null);
+    setAlertsSuccess(false);
+    try {
+      await api<Organization>(`/organizations/${org.id}`, {
+        token,
+        method: 'PATCH',
+        body: { alertPhone: alertPhone.trim() || null, alertsEnabled },
+      });
+      onUpdate(org.id, { alertPhone: alertPhone.trim() || null, alertsEnabled });
+      setAlertsSuccess(true);
+      setTimeout(() => setAlertsSuccess(false), 2500);
+    } catch (e) {
+      setAlertsError((e as Error).message);
+    } finally {
+      setAlertsBusy(false);
+    }
+  }
+
+  async function handleEditSave() {
+    if (!editName.trim()) { setEditError('Le nom est requis.'); return; }
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      await api<Organization>(`/organizations/${org.id}`, {
+        token,
+        method: 'PATCH',
+        body: { name: editName.trim(), email: editEmail.trim() || null },
+      });
+      onUpdate(org.id, { name: editName.trim(), email: editEmail.trim() || null });
+      setEditOpen(false);
+    } catch (e) {
+      setEditError((e as Error).message);
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
+  function handleEditCancel() {
+    setEditOpen(false);
+    setEditName(org.name);
+    setEditEmail(org.email ?? '');
+    setEditError(null);
+  }
+
+  async function handleDetailToggle() {
+    if (isDetailOpen) {
+      onToggleDetail();
+      return;
+    }
+    onToggleDetail();
+    if (detailFetched.current) return;
+    setDetailLoading(true);
+    setDetailError(null);
+    try {
+      const data = await api<OrgDetail>(`/organizations/${org.id}/detail`, { token });
+      setDetailData(data);
+      detailFetched.current = true;
+    } catch (e) {
+      setDetailError((e as Error).message);
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!window.confirm(`Supprimer l'organisation "${org.name}" ?\n\nCette action est irréversible.`)) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await api<Organization>(`/organizations/${org.id}`, { token, method: 'DELETE' });
+      onDelete(org.id);
+    } catch (e) {
+      setDeleteError((e as Error).message);
+      setDeleteBusy(false);
+    }
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+
+  return (
+    <>
+      {/* ── Main row ── */}
+      <tr>
+        <td style={S.td}>
+          <span style={{ fontWeight: 800, color: '#111827' }}>{org.name}</span>
+        </td>
+
+        <td style={S.td}>
+          <span
+            style={{
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+              fontSize: 12,
+              color: '#374151',
+            }}
+          >
+            {org.slug}
+          </span>
+        </td>
+
+        {/* Plan — inline select */}
+        <td style={S.td}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <select
+              style={planSelectStyle(plan)}
+              value={plan}
+              disabled={planBusy}
+              onChange={(e) => handlePlanChange(e.target.value as OrgPlan)}
+            >
+              {PLANS.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+            {planBusy && <span style={{ fontSize: 11, color: '#6b7280' }}>…</span>}
+            {planConfirm && <span style={{ fontSize: 11, color: '#16a34a', fontWeight: 800 }}>✓</span>}
+            {planError && (
+              <span style={{ fontSize: 11, color: '#dc2626' }} title={planError}>!</span>
+            )}
+          </div>
+        </td>
+
+        <td style={S.td}>
+          <span style={statusBadgeStyle(org.isActive)}>
+            {org.isActive ? 'Actif' : 'Suspendu'}
+          </span>
+        </td>
+
+        <td style={{ ...S.td, textAlign: 'right', fontWeight: 800 }}>{org.busCount}</td>
+        <td style={{ ...S.td, textAlign: 'right', fontWeight: 800 }}>{org.userCount}</td>
+
+        <td style={{ ...S.td, ...S.smallText }}>
+          {new Date(org.createdAt).toLocaleDateString('fr-FR', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+          })}
+        </td>
+
+        {/* Actions */}
+        <td style={{ ...S.td, whiteSpace: 'nowrap' }}>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button
+              style={org.isActive ? S.btnDanger : S.btnGhost}
+              disabled={toggleBusy}
+              onClick={handleToggleActive}
+            >
+              {toggleBusy ? '…' : org.isActive ? 'Suspendre' : 'Activer'}
+            </button>
+            <button
+              style={S.btnGhost}
+              onClick={() => {
+                setEditOpen((o) => !o);
+                setEditError(null);
+              }}
+            >
+              {editOpen ? 'Annuler ▴' : 'Modifier'}
+            </button>
+            <button style={S.btnGhost} onClick={() => setAlertsOpen((o) => !o)}>
+              {alertsOpen ? 'SMS ▴' : 'SMS ▾'}
+            </button>
+            <button style={S.btnGhost} onClick={handleDetailToggle}>
+              {isDetailOpen ? 'Détails ▴' : 'Détails ▾'}
+            </button>
+            <button style={S.btnDanger} disabled={deleteBusy} onClick={handleDelete}>
+              {deleteBusy ? '…' : 'Supprimer'}
+            </button>
+          </div>
+          {deleteError && <div style={S.inlineError}>{deleteError}</div>}
+        </td>
+      </tr>
+
+      {/* ── Edit form row ── */}
+      {editOpen && (
+        <tr>
+          <td colSpan={colCount} style={{ padding: 0 }}>
+            <div style={{ ...S.expandPanel, borderLeft: '3px solid #f59e0b' }}>
+              <p style={{ ...S.label, marginBottom: 10, color: '#92400e' }}>Modifier l'organisation</p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, maxWidth: 520 }}>
+                <div style={S.formGroup}>
+                  <label style={S.label}>Nom *</label>
+                  <input
+                    style={S.input}
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                  />
+                </div>
+                <div style={S.formGroup}>
+                  <label style={S.label}>Email</label>
+                  <input
+                    style={S.input}
+                    type="email"
+                    value={editEmail}
+                    onChange={(e) => setEditEmail(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
+                <button style={S.btnPrimary} disabled={editBusy} onClick={handleEditSave}>
+                  {editBusy ? 'Enregistrement…' : 'Enregistrer'}
+                </button>
+                <button style={S.btnGhost} onClick={handleEditCancel}>
+                  Annuler
+                </button>
+              </div>
+              {editError && <div style={S.inlineError}>{editError}</div>}
+            </div>
+          </td>
+        </tr>
+      )}
+
+      {/* ── Alertes SMS row ── */}
+      {alertsOpen && (
+        <tr>
+          <td colSpan={colCount} style={{ padding: 0 }}>
+            <div style={{ ...S.expandPanel, borderLeft: '3px solid #10b981' }}>
+              <p style={{ ...S.label, marginBottom: 10, color: '#065f46' }}>Alertes SMS</p>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+                <div style={S.formGroup}>
+                  <label style={S.label}>Téléphone d'alerte (E.164)</label>
+                  <input
+                    style={{ ...S.input, width: 220 }}
+                    type="tel"
+                    placeholder="+2250701234567"
+                    value={alertPhone}
+                    onChange={(e) => setAlertPhone(e.target.value)}
+                  />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 10 }}>
+                  <input
+                    id={`alerts-enabled-${org.id}`}
+                    type="checkbox"
+                    checked={alertsEnabled}
+                    onChange={(e) => setAlertsEnabled(e.target.checked)}
+                  />
+                  <label htmlFor={`alerts-enabled-${org.id}`} style={S.label}>
+                    Alertes activées
+                  </label>
+                </div>
+                <div style={{ paddingBottom: 10 }}>
+                  <button style={S.btnPrimary} disabled={alertsBusy} onClick={handleAlertsSave}>
+                    {alertsBusy ? '…' : 'Enregistrer'}
+                  </button>
+                </div>
+                {alertsSuccess && (
+                  <span style={{ fontSize: 12, color: '#16a34a', fontWeight: 800, paddingBottom: 10 }}>
+                    ✓ Enregistré
+                  </span>
+                )}
+              </div>
+              {alertsError && <div style={S.inlineError}>{alertsError}</div>}
+            </div>
+          </td>
+        </tr>
+      )}
+
+      {/* ── Detail panel row ── */}
+      {isDetailOpen && (
+        <tr>
+          <td colSpan={colCount} style={{ padding: 0 }}>
+            <div style={{ ...S.expandPanel, borderLeft: '3px solid #6366f1' }}>
+              <p style={{ ...S.label, marginBottom: 12, color: '#4338ca' }}>
+                Détails — {org.name}
+              </p>
+
+              {detailLoading && <p style={S.smallText}>Chargement…</p>}
+              {detailError && <div style={S.inlineError}>{detailError}</div>}
+
+              {detailData && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                  {/* Buses */}
+                  <div>
+                    <p style={{ ...S.label, marginBottom: 8 }}>
+                      Bus ({detailData.buses.length})
+                    </p>
+                    {detailData.buses.length === 0 ? (
+                      <p style={S.smallText}>Aucun bus</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        {detailData.buses.map((b) => (
+                          <div key={b.id} style={{ fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <span style={{ fontWeight: 700, minWidth: 40 }}>{b.number ?? '—'}</span>
+                            <span style={{ color: '#6b7280' }}>{b.plate ?? '—'}</span>
+                            <span style={statusBadgeStyle(b.isActive)}>
+                              {b.isActive ? 'Actif' : 'Inactif'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Users */}
+                  <div>
+                    <p style={{ ...S.label, marginBottom: 8 }}>
+                      Utilisateurs ({detailData.users.length})
+                    </p>
+                    {detailData.users.length === 0 ? (
+                      <p style={S.smallText}>Aucun utilisateur</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        {detailData.users.map((u) => (
+                          <div key={u.id} style={{ fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <span style={{ fontWeight: 700 }}>
+                              {u.firstName} {u.lastName}
+                            </span>
+                            <span style={{ color: '#6b7280' }}>{u.phone ?? '—'}</span>
+                            <span style={{ color: '#6366f1', fontWeight: 600, fontSize: 11 }}>
+                              {u.role}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Stats + Routes */}
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <p style={{ ...S.label, marginBottom: 8 }}>Statistiques</p>
+                    <div style={{ display: 'flex', gap: 24 }}>
+                      <div>
+                        <p style={{ ...S.statLabel, fontSize: 10 }}>Trajets actifs</p>
+                        <p style={{ fontSize: 22, fontWeight: 800, color: '#111827', margin: 0 }}>
+                          {detailData.activeTrips}
+                        </p>
+                      </div>
+                      <div>
+                        <p style={{ ...S.statLabel, fontSize: 10 }}>7 derniers jours</p>
+                        <p style={{ fontSize: 22, fontWeight: 800, color: '#111827', margin: 0 }}>
+                          {detailData.tripsLast7Days}
+                        </p>
+                      </div>
+                      <div>
+                        <p style={{ ...S.statLabel, fontSize: 10 }}>Routes</p>
+                        <p style={{ fontSize: 22, fontWeight: 800, color: '#111827', margin: 0 }}>
+                          {detailData.routes.length}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
 
 const EMPTY_FORM: CreateTenantForm = {
   name: '',
@@ -310,8 +769,9 @@ const EMPTY_FORM: CreateTenantForm = {
   adminPin: '',
 };
 
+const COL_COUNT = 8;
+
 export default function SuperAdminDashboard() {
-  // ── State (all hooks before conditional return) ──────────────────────────
   const [stats, setStats] = useState<PlatformStats | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
 
@@ -324,14 +784,14 @@ export default function SuperAdminDashboard() {
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
 
-  const [toggleBusy, setToggleBusy] = useState<string | null>(null);
+  // Only one detail panel open at a time
+  const [openDetailId, setOpenDetailId] = useState<string | null>(null);
 
-  // ── Auth ─────────────────────────────────────────────────────────────────
   const token = getToken();
   const rawUser = getUser() as { id: string; phone: string; role: string } | null;
   const role = rawUser?.role;
 
-  // ── Data fetchers ─────────────────────────────────────────────────────────
+  // ── Data fetchers ──────────────────────────────────────────────────────────
 
   async function loadStats(tk: string) {
     try {
@@ -347,8 +807,6 @@ export default function SuperAdminDashboard() {
     setOrgsError(null);
     try {
       const list = await api<Organization[]>('/organizations', { token: tk });
-
-      // Enrich each org with its stats in parallel
       const enriched = await Promise.all(
         list.map(async (org) => {
           try {
@@ -374,23 +832,38 @@ export default function SuperAdminDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Auth guard (after hooks) ──────────────────────────────────────────────
+  // ── Auth guard (after all hooks) ──────────────────────────────────────────
   if (!token || role !== 'SUPERADMIN') {
     return (
-      <div style={{ padding: 40, textAlign: 'center', color: '#374151', fontSize: 15, fontWeight: 700 }}>
+      <div
+        style={{ padding: 40, textAlign: 'center', color: '#374151', fontSize: 15, fontWeight: 700 }}
+      >
         Accès refusé.
       </div>
     );
   }
 
-  // ── Handlers ──────────────────────────────────────────────────────────────
+  // ── Org list handlers ─────────────────────────────────────────────────────
+
+  function handleOrgUpdate(id: string, patch: Partial<OrgWithStats>) {
+    setOrgs((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)));
+  }
+
+  function handleOrgDelete(id: string) {
+    setOrgs((prev) => prev.filter((o) => o.id !== id));
+    setOpenDetailId((prev) => (prev === id ? null : prev));
+  }
+
+  function handleToggleDetail(id: string) {
+    setOpenDetailId((prev) => (prev === id ? null : id));
+  }
+
+  // ── Form handlers ─────────────────────────────────────────────────────────
 
   function handleFormChange(field: keyof CreateTenantForm, value: string) {
     setForm((prev) => {
       const next = { ...prev, [field]: value };
-      if (field === 'name') {
-        next.slug = toSlug(value);
-      }
+      if (field === 'name') next.slug = toSlug(value);
       return next;
     });
   }
@@ -399,17 +872,15 @@ export default function SuperAdminDashboard() {
     e.preventDefault();
     setFormError(null);
     setFormSuccess(null);
-
     if (!form.name.trim()) { setFormError('Le nom de la société est requis.'); return; }
     if (!form.slug.trim()) { setFormError('Le slug est requis.'); return; }
-    if (!form.adminFirstName.trim()) { setFormError('Le prénom de l\'admin est requis.'); return; }
-    if (!form.adminLastName.trim()) { setFormError('Le nom de l\'admin est requis.'); return; }
-    if (!form.adminPhone.trim()) { setFormError('Le téléphone de l\'admin est requis.'); return; }
+    if (!form.adminFirstName.trim()) { setFormError("Le prénom de l'admin est requis."); return; }
+    if (!form.adminLastName.trim()) { setFormError("Le nom de l'admin est requis."); return; }
+    if (!form.adminPhone.trim()) { setFormError("Le téléphone de l'admin est requis."); return; }
     if (form.adminPin.length < 4 || form.adminPin.length > 8) {
       setFormError('Le PIN doit contenir entre 4 et 8 chiffres.');
       return;
     }
-
     setFormBusy(true);
     try {
       await api<Organization>('/organizations', {
@@ -427,30 +898,11 @@ export default function SuperAdminDashboard() {
       });
       setFormSuccess(`Tenant « ${form.name} » créé avec succès.`);
       setForm(EMPTY_FORM);
-      // Refresh list and stats
       await Promise.all([loadStats(token!), loadOrgs(token!)]);
     } catch (e) {
       setFormError((e as Error).message);
     } finally {
       setFormBusy(false);
-    }
-  }
-
-  async function handleToggleActive(org: OrgWithStats) {
-    setToggleBusy(org.id);
-    try {
-      await api<Organization>(`/organizations/${org.id}`, {
-        token: token!,
-        method: 'PATCH',
-        body: { isActive: !org.isActive },
-      });
-      setOrgs((prev) =>
-        prev.map((o) => (o.id === org.id ? { ...o, isActive: !o.isActive } : o)),
-      );
-    } catch (e) {
-      setOrgsError((e as Error).message);
-    } finally {
-      setToggleBusy(null);
     }
   }
 
@@ -464,7 +916,7 @@ export default function SuperAdminDashboard() {
         <p style={S.sub}>Gestion globale des tenants et de la flotte</p>
       </div>
 
-      {/* Stats bar */}
+      {/* Stats bar — 4 tiles */}
       <div style={S.statsRow}>
         <div style={S.statCard}>
           <span style={S.statLabel}>Organisations</span>
@@ -485,6 +937,18 @@ export default function SuperAdminDashboard() {
             {statsError ? '—' : stats == null ? '…' : stats.userCount}
           </span>
         </div>
+        <div style={S.statCard}>
+          <span style={S.statLabel}>Trajets Aujourd'hui</span>
+          <span style={S.statValue}>
+            {statsError
+              ? '—'
+              : stats == null
+              ? '…'
+              : stats.tripsToday != null
+              ? stats.tripsToday
+              : '—'}
+          </span>
+        </div>
       </div>
 
       {/* Create tenant form */}
@@ -493,7 +957,6 @@ export default function SuperAdminDashboard() {
         <div style={S.card}>
           <form onSubmit={handleCreate} noValidate>
             <div style={S.formGrid}>
-              {/* Nom */}
               <div style={S.formGroup}>
                 <label style={S.label}>Nom de la société *</label>
                 <input
@@ -504,8 +967,6 @@ export default function SuperAdminDashboard() {
                   onChange={(e) => handleFormChange('name', e.target.value)}
                 />
               </div>
-
-              {/* Slug */}
               <div style={S.formGroup}>
                 <label style={S.label}>Slug *</label>
                 <input
@@ -516,8 +977,6 @@ export default function SuperAdminDashboard() {
                   onChange={(e) => handleFormChange('slug', e.target.value)}
                 />
               </div>
-
-              {/* Email */}
               <div style={S.formGroup}>
                 <label style={S.label}>Email (optionnel)</label>
                 <input
@@ -528,8 +987,6 @@ export default function SuperAdminDashboard() {
                   onChange={(e) => handleFormChange('email', e.target.value)}
                 />
               </div>
-
-              {/* Prénom admin */}
               <div style={S.formGroup}>
                 <label style={S.label}>Prénom admin *</label>
                 <input
@@ -540,8 +997,6 @@ export default function SuperAdminDashboard() {
                   onChange={(e) => handleFormChange('adminFirstName', e.target.value)}
                 />
               </div>
-
-              {/* Nom admin */}
               <div style={S.formGroup}>
                 <label style={S.label}>Nom admin *</label>
                 <input
@@ -552,8 +1007,6 @@ export default function SuperAdminDashboard() {
                   onChange={(e) => handleFormChange('adminLastName', e.target.value)}
                 />
               </div>
-
-              {/* Téléphone admin */}
               <div style={S.formGroup}>
                 <label style={S.label}>Téléphone admin *</label>
                 <input
@@ -564,8 +1017,6 @@ export default function SuperAdminDashboard() {
                   onChange={(e) => handleFormChange('adminPhone', e.target.value)}
                 />
               </div>
-
-              {/* PIN admin */}
               <div style={{ ...S.formGroup, gridColumn: '1 / -1' }}>
                 <label style={S.label}>PIN admin (4–8 chiffres) *</label>
                 <input
@@ -594,7 +1045,7 @@ export default function SuperAdminDashboard() {
         </div>
       </div>
 
-      {/* Organizations list */}
+      {/* Organisations list */}
       <div style={S.section}>
         <h2 style={S.sectionTitle}>Organisations</h2>
         <div style={S.card}>
@@ -604,13 +1055,11 @@ export default function SuperAdminDashboard() {
             </p>
           )}
           {orgsError && <div style={S.errorBox}>{orgsError}</div>}
-
           {!orgsLoading && !orgsError && orgs.length === 0 && (
             <p style={{ ...S.smallText, textAlign: 'center', padding: '20px 0' }}>
               Aucune organisation pour l'instant.
             </p>
           )}
-
           {!orgsLoading && orgs.length > 0 && (
             <div style={{ overflowX: 'auto' }}>
               <table style={S.table}>
@@ -623,62 +1072,21 @@ export default function SuperAdminDashboard() {
                     <th style={{ ...S.th, textAlign: 'right' }}>Bus</th>
                     <th style={{ ...S.th, textAlign: 'right' }}>Utilisateurs</th>
                     <th style={S.th}>Créé le</th>
-                    <th style={S.th}></th>
+                    <th style={S.th}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {orgs.map((org) => (
-                    <tr key={org.id}>
-                      <td style={S.td}>
-                        <span style={{ fontWeight: 800, color: '#111827' }}>{org.name}</span>
-                      </td>
-                      <td style={S.td}>
-                        <span
-                          style={{
-                            fontFamily:
-                              'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                            fontSize: 12,
-                            color: '#374151',
-                          }}
-                        >
-                          {org.slug}
-                        </span>
-                      </td>
-                      <td style={S.td}>
-                        <span style={planBadge(org.plan)}>{org.plan}</span>
-                      </td>
-                      <td style={S.td}>
-                        <span style={statusBadge(org.isActive)}>
-                          {org.isActive ? 'Actif' : 'Suspendu'}
-                        </span>
-                      </td>
-                      <td style={{ ...S.td, textAlign: 'right', fontWeight: 800 }}>
-                        {org.busCount}
-                      </td>
-                      <td style={{ ...S.td, textAlign: 'right', fontWeight: 800 }}>
-                        {org.userCount}
-                      </td>
-                      <td style={{ ...S.td, ...S.smallText }}>
-                        {new Date(org.createdAt).toLocaleDateString('fr-FR', {
-                          day: '2-digit',
-                          month: 'short',
-                          year: 'numeric',
-                        })}
-                      </td>
-                      <td style={{ ...S.td, whiteSpace: 'nowrap' }}>
-                        <button
-                          style={org.isActive ? S.btnDanger : S.btnGhost}
-                          disabled={toggleBusy === org.id}
-                          onClick={() => handleToggleActive(org)}
-                        >
-                          {toggleBusy === org.id
-                            ? '…'
-                            : org.isActive
-                            ? 'Suspendre'
-                            : 'Activer'}
-                        </button>
-                      </td>
-                    </tr>
+                    <OrgRow
+                      key={org.id}
+                      org={org}
+                      token={token!}
+                      colCount={COL_COUNT}
+                      onUpdate={handleOrgUpdate}
+                      onDelete={handleOrgDelete}
+                      isDetailOpen={openDetailId === org.id}
+                      onToggleDetail={() => handleToggleDetail(org.id)}
+                    />
                   ))}
                 </tbody>
               </table>
