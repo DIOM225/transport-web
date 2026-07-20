@@ -413,7 +413,7 @@ export default function SuperAdminDashboard() {
     setFormBusy(true);
     try {
       await api<Organization>('/organizations', {
-        token,
+        token: token!,
         method: 'POST',
         body: {
           name: form.name.trim(),
@@ -428,7 +428,7 @@ export default function SuperAdminDashboard() {
       setFormSuccess(`Tenant « ${form.name} » créé avec succès.`);
       setForm(EMPTY_FORM);
       // Refresh list and stats
-      await Promise.all([loadStats(token), loadOrgs(token)]);
+      await Promise.all([loadStats(token!), loadOrgs(token!)]);
     } catch (e) {
       setFormError((e as Error).message);
     } finally {
@@ -440,7 +440,7 @@ export default function SuperAdminDashboard() {
     setToggleBusy(org.id);
     try {
       await api<Organization>(`/organizations/${org.id}`, {
-        token,
+        token: token!,
         method: 'PATCH',
         body: { isActive: !org.isActive },
       });
