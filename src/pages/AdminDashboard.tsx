@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { getToken, clearSession } from '../lib/auth';
+import TripReplayModal from './TripReplayModal';
 
 import Map, { Marker, Popup, type MapRef } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -784,6 +785,7 @@ function HistoriquePanel({
   routeMap,
   loading,
   onRefresh,
+  onReplay,
 }: {
   trips: Trip[];
   userMap: Record<string, AdminUser>;
@@ -791,6 +793,7 @@ function HistoriquePanel({
   routeMap: Record<string, Route>;
   loading: boolean;
   onRefresh: () => void;
+  onReplay: (tripId: string) => void;
 }) {
   const completed = trips.filter((t) => t.status === 'COMPLETED').sort((a, b) =>
     (b.endedAt ?? b.createdAt) > (a.endedAt ?? a.createdAt) ? 1 : -1
@@ -867,6 +870,12 @@ function HistoriquePanel({
                       {((t.distanceKm / t.durationMin) * 60).toFixed(0)} km/h moy.
                     </div>
                   ) : null}
+                  <button
+                    onClick={() => onReplay(t.id)}
+                    style={{ marginLeft: 'auto', padding: '3px 10px', borderRadius: 6, border: '1px solid #bfdbfe', background: '#eff6ff', color: '#1d4ed8', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}
+                  >
+                    ▶ Replay
+                  </button>
                 </div>
               </div>
             );
@@ -1529,6 +1538,7 @@ export default function AdminDashboard() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [tripsLoading, setTripsLoading] = useState(false);
   const [tripsError, setTripsError] = useState<string | null>(null);
+  const [replayTripId, setReplayTripId] = useState<string | null>(null);
   const [tBusId, setTBusId] = useState('');
   const [tRouteId, setTRouteId] = useState('');
   const [tCreateLoading, setTCreateLoading] = useState(false);
@@ -1628,6 +1638,9 @@ export default function AdminDashboard() {
 
   return (
     <div style={styles.page}>
+      {replayTripId && token && (
+        <TripReplayModal tripId={replayTripId} token={token} onClose={() => setReplayTripId(null)} />
+      )}
       <div style={styles.header}>
         <div>
           <div style={styles.h1}>DiomST · Contrôle de flotte</div>
@@ -2305,7 +2318,7 @@ export default function AdminDashboard() {
             </>
 
           ) : panel === 'HISTORIQUE' ? (
-            <HistoriquePanel trips={trips} userMap={userMap} busMap={busMap} routeMap={routeMap} loading={tripsLoading} onRefresh={refreshTrips} />
+            <HistoriquePanel trips={trips} userMap={userMap} busMap={busMap} routeMap={routeMap} loading={tripsLoading} onRefresh={refreshTrips} onReplay={setReplayTripId} />
 
           ) : panel === 'ALERTES' ? (
             <>
