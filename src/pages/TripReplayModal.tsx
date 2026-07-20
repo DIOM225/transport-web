@@ -133,6 +133,7 @@ export default function TripReplayModal({
 
   const geojsonLine = data && data.positions.length >= 2 ? {
     type: 'Feature' as const,
+    properties: null,
     geometry: {
       type: 'LineString' as const,
       coordinates: data.positions.map((p) => [p.lng, p.lat]),
@@ -141,6 +142,7 @@ export default function TripReplayModal({
 
   const geojsonDone = data && idx > 0 ? {
     type: 'Feature' as const,
+    properties: null,
     geometry: {
       type: 'LineString' as const,
       coordinates: data.positions.slice(0, idx + 1).map((p) => [p.lng, p.lat]),
