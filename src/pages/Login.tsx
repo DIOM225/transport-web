@@ -59,7 +59,7 @@ const styles: Record<string, React.CSSProperties> = {
 
 function redirectPathForRole(role: Role) {
   if (role === 'DRIVER') return '/driver';
-  // ADMIN / OPERATOR -> admin console (for now same page)
+  if (role === 'SUPERADMIN') return '/superadmin';
   return '/admin';
 }
 
