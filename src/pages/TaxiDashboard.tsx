@@ -174,7 +174,7 @@ export default function TaxiDashboard() {
 }
 
 /* ---------------- LIVE ---------------- */
-function LiveTab({ vehicles, counts, mapRef }: { vehicles: Vehicle[]; counts: any; mapRef: React.RefObject<MapRef> }) {
+function LiveTab({ vehicles, counts, mapRef }: { vehicles: Vehicle[]; counts: any; mapRef: React.RefObject<MapRef | null> }) {
   const [sel, setSel] = useState<string | null>(null);
   const selected = vehicles.find((v) => v.userId === sel) ?? null;
   return (
@@ -324,7 +324,7 @@ function LeaderTab() {
 }
 
 /* ---------------- ZONES ---------------- */
-function ZonesTab({ mapRef }: { mapRef: React.RefObject<MapRef> }) {
+function ZonesTab({ mapRef }: { mapRef: React.RefObject<MapRef | null> }) {
   const [zones, setZones] = useState<Zone[]>([]);
   const [name, setName] = useState('');
   const [kind, setKind] = useState<ZoneKind>('ALLOWED');
