@@ -1,9 +1,12 @@
 export type Role = 'ADMIN' | 'OPERATOR' | 'DRIVER' | 'SUPERADMIN';
+export type CompanyType = 'INTERCITY_BUS' | 'TAXI_FLEET';
 
 export type User = {
   id: string;
   phone: string;
   role: Role;
+  organizationId?: string | null;
+  companyType?: CompanyType | null;
 };
 
 const TOKEN_KEY = 'transport_token';
@@ -76,6 +79,7 @@ async function request<T>(
 
 export type LoginResponse = {
   accessToken: string;
+  companyType?: CompanyType;
   user: User;
 };
 

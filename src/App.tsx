@@ -7,7 +7,15 @@ import Landing from './pages/Landing';
 import Login from './pages/Login';
 import DriverDashboard from './pages/DriverDashboard';
 import AdminDashboard from './pages/AdminDashboard';
+import TaxiDashboard from './pages/TaxiDashboard';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
+import { getUser } from './lib/auth';
+
+/** Admin landing chooses the dashboard variant by the org's company type. */
+function AdminRouter() {
+  const user = getUser();
+  return user?.companyType === 'TAXI_FLEET' ? <TaxiDashboard /> : <AdminDashboard />;
+}
 
 export default function App() {
   return (
@@ -25,10 +33,12 @@ export default function App() {
             </Route>
 
             <Route element={<RequireRole allow={['ADMIN', 'OPERATOR']} />}>
-              <Route path="/admin" element={<AdminDashboard />} />
+              <Route path="/admin" element={<AdminRouter />} />
             </Route>
 
-            <Route path="/superadmin" element={<SuperAdminDashboard />} />
+            <Route element={<RequireRole allow={['SUPERADMIN']} />}>
+              <Route path="/superadmin" element={<SuperAdminDashboard />} />
+            </Route>
           </Route>
 
           {/* Fallback */}

@@ -12,6 +12,7 @@ type Organization = {
   slug: string;
   email: string | null;
   plan: OrgPlan;
+  companyType?: CompanyType;
   isActive: boolean;
   createdAt: string;
   alertPhone?: string | null;
@@ -28,10 +29,13 @@ type PlatformStats = {
   tripsToday?: number;
 };
 
+type CompanyType = 'INTERCITY_BUS' | 'TAXI_FLEET';
+
 type CreateTenantForm = {
   name: string;
   slug: string;
   email: string;
+  companyType: CompanyType;
   adminFirstName: string;
   adminLastName: string;
   adminPhone: string;
@@ -493,6 +497,16 @@ function OrgRow({ org, token, colCount, onUpdate, onDelete, isDetailOpen, onTogg
       <tr>
         <td style={S.td}>
           <span style={{ fontWeight: 800, color: '#111827' }}>{org.name}</span>
+          <span
+            title={org.companyType === 'TAXI_FLEET' ? 'Flotte de taxis' : 'Bus interurbain'}
+            style={{
+              marginLeft: 8, fontSize: 11, fontWeight: 800, padding: '2px 7px', borderRadius: 999,
+              background: org.companyType === 'TAXI_FLEET' ? '#fef3c7' : '#dbeafe',
+              color: org.companyType === 'TAXI_FLEET' ? '#92400e' : '#1e40af',
+            }}
+          >
+            {org.companyType === 'TAXI_FLEET' ? '🚕 Taxi' : '🚌 Bus'}
+          </span>
         </td>
 
         <td style={S.td}>
@@ -763,6 +777,7 @@ const EMPTY_FORM: CreateTenantForm = {
   name: '',
   slug: '',
   email: '',
+  companyType: 'INTERCITY_BUS',
   adminFirstName: '',
   adminLastName: '',
   adminPhone: '',
@@ -890,6 +905,7 @@ export default function SuperAdminDashboard() {
           name: form.name.trim(),
           slug: form.slug.trim(),
           email: form.email.trim() || undefined,
+          companyType: form.companyType,
           adminFirstName: form.adminFirstName.trim(),
           adminLastName: form.adminLastName.trim(),
           adminPhone: form.adminPhone.trim(),
@@ -986,6 +1002,35 @@ export default function SuperAdminDashboard() {
                   value={form.email}
                   onChange={(e) => handleFormChange('email', e.target.value)}
                 />
+              </div>
+              <div style={S.formGroup}>
+                <label style={S.label}>Type de société *</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => handleFormChange('companyType', 'INTERCITY_BUS')}
+                    style={{
+                      flex: 1, padding: '10px', borderRadius: 12, cursor: 'pointer', fontWeight: 800, fontSize: 13,
+                      border: form.companyType === 'INTERCITY_BUS' ? '2px solid #111827' : '1px solid #e5e7eb',
+                      background: form.companyType === 'INTERCITY_BUS' ? '#f9fafb' : '#fff',
+                      color: form.companyType === 'INTERCITY_BUS' ? '#111827' : '#6b7280',
+                    }}
+                  >
+                    🚌 Bus interurbain
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleFormChange('companyType', 'TAXI_FLEET')}
+                    style={{
+                      flex: 1, padding: '10px', borderRadius: 12, cursor: 'pointer', fontWeight: 800, fontSize: 13,
+                      border: form.companyType === 'TAXI_FLEET' ? '2px solid #111827' : '1px solid #e5e7eb',
+                      background: form.companyType === 'TAXI_FLEET' ? '#f9fafb' : '#fff',
+                      color: form.companyType === 'TAXI_FLEET' ? '#111827' : '#6b7280',
+                    }}
+                  >
+                    🚕 Flotte de taxis
+                  </button>
+                </div>
               </div>
               <div style={S.formGroup}>
                 <label style={S.label}>Prénom admin *</label>
