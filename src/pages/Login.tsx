@@ -126,9 +126,10 @@ export default function Login() {
         <label style={styles.label}>PIN</label>
         <input
           style={styles.input}
+          type="password"
           value={pin}
           onChange={(e) => setPin(e.target.value)}
-          autoComplete="one-time-code"
+          autoComplete="current-password"
           inputMode="numeric"
           placeholder="Ex: 2876"
           disabled={loading}

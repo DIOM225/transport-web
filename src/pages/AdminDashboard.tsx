@@ -10,7 +10,7 @@ type UserRole = 'ADMIN' | 'OPERATOR' | 'DRIVER';
 type FleetStatus = 'ONLINE' | 'STALE' | 'OFFLINE';
 type MotionStatus = 'MOVING' | 'IDLE';
 
-const STALE_AFTER_MS  = 2  * 60_000; // 2 min silence → amber badge
+const STALE_AFTER_MS  = 3  * 60_000; // 3 min silence → amber badge (synced with server ONLINE_AFTER_MS)
 const OFFLINE_AFTER_MS = 10 * 60_000; // 10 min silence → red / offline
 
 const STALE_MS = 2 * 60 * 60 * 1000;       // 2 hours — remove from map
@@ -551,6 +551,69 @@ function severityColors(s?: OverspeedSeverity): { bg: string; border: string; te
   return                       { bg: '#fefce8', border: '#fde68a', text: '#854d0e', left: '#eab308' };
 }
 
+/**
+ * Marker that glides to each new position instead of jumping — the map-level
+ * counterpart of the app's Kalman smoothing. Tweens lng/lat over ANIM_MS with
+ * ease-out. Sub-meter hops render instantly (no wasted frames) and jumps
+ * > 500 m (reconnect backfill, teleport) snap directly to avoid a fake glide
+ * across the city.
+ */
+const MARKER_ANIM_MS = 1000; // matches the ~1 s position cadence → continuous motion
+
+function AnimatedMarker({
+  longitude,
+  latitude,
+  children,
+  ...rest
+}: { longitude: number; latitude: number; children?: React.ReactNode } & Omit<
+  React.ComponentProps<typeof Marker>,
+  'longitude' | 'latitude' | 'children'
+>) {
+  const [pos, setPos] = useState({ lng: longitude, lat: latitude });
+  const animRef = useRef<number | null>(null);
+  const currentRef = useRef({ lng: longitude, lat: latitude });
+
+  useEffect(() => {
+    const from = { ...currentRef.current };
+    const dLng = longitude - from.lng;
+    const dLat = latitude - from.lat;
+
+    // Approximate meters (fine at Abidjan's latitude)
+    const jumpM = Math.hypot(
+      dLat * 111_320,
+      dLng * 111_320 * Math.cos((latitude * Math.PI) / 180),
+    );
+
+    if (jumpM < 0.5 || jumpM > 500) {
+      currentRef.current = { lng: longitude, lat: latitude };
+      setPos({ lng: longitude, lat: latitude });
+      return;
+    }
+
+    const t0 = performance.now();
+    const step = (t: number) => {
+      const k = Math.min(1, (t - t0) / MARKER_ANIM_MS);
+      const e = 1 - (1 - k) * (1 - k); // ease-out
+      const next = { lng: from.lng + dLng * e, lat: from.lat + dLat * e };
+      currentRef.current = next;
+      setPos(next);
+      if (k < 1) animRef.current = requestAnimationFrame(step);
+    };
+
+    if (animRef.current) cancelAnimationFrame(animRef.current);
+    animRef.current = requestAnimationFrame(step);
+    return () => {
+      if (animRef.current) cancelAnimationFrame(animRef.current);
+    };
+  }, [longitude, latitude]);
+
+  return (
+    <Marker longitude={pos.lng} latitude={pos.lat} {...rest}>
+      {children}
+    </Marker>
+  );
+}
+
 function markerDot(status: FleetStatus, selected: boolean): React.CSSProperties {
   const color = status === 'ONLINE' ? '#16a34a' : status === 'STALE' ? '#f59e0b' : '#ef4444';
   const size = selected ? 18 : 14;
@@ -947,6 +1010,8 @@ export default function AdminDashboard() {
 
   const socketRef = useRef<Socket | null>(null);
   const mapRef    = useRef<MapRef>(null);
+  const lastMapCenterRef = useRef<[number, number] | null>(null);
+  const overspeedTimerRefs = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
   // Walkie-talkie
   const mediaRecorderRef  = useRef<MediaRecorder | null>(null);
@@ -972,6 +1037,10 @@ export default function AdminDashboard() {
     severity?: OverspeedSeverity;
   };
   const [overspeedAlerts, setOverspeedAlerts] = useState<OverspeedAlert[]>([]);
+
+  // GPS health alerts pushed by the driver-app watchdog (fleet:health)
+  type HealthAlert = { userId: string; busNumber: string | null; reason: string; at: number };
+  const [healthAlerts, setHealthAlerts] = useState<HealthAlert[]>([]);
 
   const dismissOverspeed = (id: string) =>
     setOverspeedAlerts((prev) => prev.filter((a) => a.id !== id));
@@ -1094,6 +1163,23 @@ export default function AdminDashboard() {
       });
     });
 
+    socket.on('fleet:health', (evt: any) => {
+      if (!evt?.userId) return;
+      setHealthAlerts((prev) => {
+        const others = prev.filter((h) => h.userId !== evt.userId);
+        if (evt.ok) return others; // issue resolved → clear the banner
+        return [
+          {
+            userId: evt.userId,
+            busNumber: evt.busNumber ?? null,
+            reason: evt.reason ?? 'Problème GPS signalé',
+            at: evt.at ?? Date.now(),
+          },
+          ...others,
+        ].slice(0, 10);
+      });
+    });
+
     socket.on('driver:overspeed', (evt: any) => {
       const alert: OverspeedAlert = {
         id: `${evt.userId}-${evt.detectedAt}`,
@@ -1110,12 +1196,15 @@ export default function AdminDashboard() {
         return [alert, ...filtered].slice(0, 10);
       });
       // Auto-dismiss after 60 s
-      setTimeout(() => setOverspeedAlerts((prev) => prev.filter((a) => a.id !== alert.id)), 60_000);
+      const timerId = setTimeout(() => setOverspeedAlerts((prev) => prev.filter((a) => a.id !== alert.id)), 60_000);
+      overspeedTimerRefs.current.add(timerId);
     });
 
     return () => {
       socket.disconnect();
       socketRef.current = null;
+      overspeedTimerRefs.current.forEach(clearTimeout);
+      overspeedTimerRefs.current.clear();
     };
   }, []);
 
@@ -1240,7 +1329,10 @@ export default function AdminDashboard() {
 
   // Fly map to new center when selection changes
   useEffect(() => {
-    mapRef.current?.flyTo({ center: [mapCenter[1], mapCenter[0]], duration: 700 });
+    const [lat, lng] = mapCenter;
+    if (lastMapCenterRef.current?.[0] === lat && lastMapCenterRef.current?.[1] === lng) return;
+    lastMapCenterRef.current = [lat, lng];
+    mapRef.current?.flyTo({ center: [lng, lat], duration: 700 });
   }, [mapCenter]);
 
   const fallbackText = useMemo(() => {
@@ -1801,6 +1893,34 @@ export default function AdminDashboard() {
         </div>
       )}
 
+      {/* GPS health alerts — bus lost permission/GPS mid-trip */}
+      {healthAlerts.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+          {healthAlerts.map((h) => (
+            <div key={h.userId} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+              padding: '7px 12px', borderRadius: 10,
+              border: '1px solid #fcd34d',
+              background: '#fffbeb', fontSize: 12, fontWeight: 900, color: '#92400e',
+              borderLeft: '4px solid #f59e0b',
+            }}>
+              <span>
+                ⚠️ GPS · <span style={styles.mono}>{h.busNumber ?? h.userId.slice(0, 8)}</span>
+                {' '}· {h.reason}
+                {' '}· {new Date(h.at).toLocaleTimeString()}
+              </span>
+              <button
+                onClick={() => setHealthAlerts((p) => p.filter((x) => x.userId !== h.userId))}
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: '#92400e', fontWeight: 950, fontSize: 14, lineHeight: 1, padding: '0 4px',
+                }}
+              >✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div style={styles.grid(panelOpen)}>
         {/* RIGHT (visually): MAP + KPI — order:2 so it renders after panel */}
         <div style={{ ...styles.card, position: 'relative', order: 2 }}>
@@ -1869,7 +1989,7 @@ export default function AdminDashboard() {
                   const isSelected = v.userId === selectedId;
                   const busLabel = v.busId ? (busMap[v.busId]?.number ?? null) : null;
                   return (
-                    <Marker
+                    <AnimatedMarker
                       key={v.userId}
                       longitude={v.lng}
                       latitude={v.lat}
@@ -1877,6 +1997,14 @@ export default function AdminDashboard() {
                       onClick={() => setSelectedId((prev) => (prev === v.userId ? null : v.userId))}
                     >
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }}>
+                        {v.motionStatus === 'MOVING' && v.headingDeg != null && (
+                          <div style={{
+                            transform: `rotate(${Math.round(v.headingDeg)}deg)`,
+                            fontSize: 11, lineHeight: 1, marginBottom: 2, color: '#111827',
+                            transition: 'transform 600ms ease',
+                            textShadow: '0 1px 2px rgba(255,255,255,0.8)',
+                          }}>▲</div>
+                        )}
                         {busLabel && (
                           <div style={{
                             background: '#111827', color: '#fff', fontSize: 10, fontWeight: 900,
@@ -1903,7 +2031,7 @@ export default function AdminDashboard() {
                           </div>
                         )}
                       </div>
-                    </Marker>
+                    </AnimatedMarker>
                   );
                 });
                 return (

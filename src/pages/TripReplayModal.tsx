@@ -3,7 +3,7 @@ import Map, { Layer, Marker, Source, type MapRef } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 const API_BASE =
-  (import.meta as any).env?.VITE_API_BASE ||
+  import.meta.env.VITE_API_BASE ||
   'https://transport-api-production-d0c6.up.railway.app';
 
 type ReplayPos = {
@@ -71,9 +71,12 @@ export default function TripReplayModal({
     fetch(`${API_BASE}/trips/${tripId}/replay`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) return r.json().then((e: any) => { throw new Error(e?.message || e?.error || `HTTP ${r.status}`); });
+        return r.json();
+      })
       .then((d: ReplayData) => { setData(d); setIdx(0); })
-      .catch((e) => setError(e.message))
+      .catch((e: any) => setError(e?.message || 'Erreur inconnue'))
       .finally(() => setLoading(false));
   }, [tripId, token]);
 
@@ -105,7 +108,7 @@ export default function TripReplayModal({
   }, []);
 
   const startPlay = useCallback(() => {
-    if (!data) return;
+    if (!data || idx >= data.positions.length - 1) return;
     setPlaying(true);
     playRef.current = setInterval(() => {
       setIdx((prev) => {
@@ -116,7 +119,7 @@ export default function TripReplayModal({
         return prev + speed;
       });
     }, PLAY_INTERVAL_MS);
-  }, [data, speed, stopPlay]);
+  }, [data, idx, speed, stopPlay]);
 
   useEffect(() => { return () => stopPlay(); }, [stopPlay]);
 
