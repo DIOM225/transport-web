@@ -27,7 +27,14 @@ type DailyRow = {
 type LeaderRow = { driverId: string; driverName: string; distanceKm: number; durationMin: number; maxSpeedKmh: number; overspeedCount: number; shifts: number };
 type Alert = { id: string; kind: 'AFTERHOURS' | 'ZONE' | 'SPEED'; text: string; at: number };
 
-type Tab = 'LIVE' | 'REPORT' | 'LEADER' | 'ZONES';
+type Tab = 'LIVE' | 'REPORT' | 'LEADER' | 'ZONES' | 'DRIVERS' | 'VEHICLES';
+
+type Driver = { id: string; firstName: string; lastName: string; phone: string; role: string; isActive: boolean; assignedVehicleId?: string | null };
+type FleetVehicle = { id: string; number: string; plate: string | null; isActive: boolean };
+const TAB_LABEL: Record<Tab, string> = {
+  LIVE: 'Carte', REPORT: 'Rapport du jour', LEADER: 'Classement',
+  ZONES: 'Zones', DRIVERS: 'Chauffeurs', VEHICLES: 'Véhicules',
+};
 
 async function authFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = getToken();
@@ -156,9 +163,9 @@ export default function TaxiDashboard() {
 
       {/* Tabs */}
       <div style={st.tabs}>
-        {(['LIVE', 'REPORT', 'LEADER', 'ZONES'] as Tab[]).map((t) => (
+        {(['LIVE', 'REPORT', 'LEADER', 'ZONES', 'DRIVERS', 'VEHICLES'] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)} style={{ ...st.tab, ...(tab === t ? st.tabOn : {}) }}>
-            {t === 'LIVE' ? 'Carte' : t === 'REPORT' ? 'Rapport du jour' : t === 'LEADER' ? 'Classement' : 'Zones'}
+            {TAB_LABEL[t]}
           </button>
         ))}
       </div>
@@ -168,6 +175,8 @@ export default function TaxiDashboard() {
         {tab === 'REPORT' && <ReportTab />}
         {tab === 'LEADER' && <LeaderTab />}
         {tab === 'ZONES' && <ZonesTab mapRef={mapRef} />}
+        {tab === 'DRIVERS' && <DriversTab />}
+        {tab === 'VEHICLES' && <VehiclesTab />}
       </div>
     </div>
   );
@@ -323,6 +332,164 @@ function LeaderTab() {
   );
 }
 
+/* ---------------- DRIVERS ---------------- */
+function DriversTab() {
+  const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [fleet, setFleet] = useState<FleetVehicle[]>([]);
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [pin, setPin] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  const load = () =>
+    Promise.all([
+      authFetch<Driver[]>('/users').then((all) => all.filter((u) => u.role === 'DRIVER')).catch(() => []),
+      authFetch<FleetVehicle[]>('/buses').catch(() => []),
+    ]).then(([ds, vs]) => { setDrivers(ds); setFleet(vs); });
+  useEffect(() => { load(); }, []);
+
+  const assignVehicle = async (d: Driver, vehicleId: string) => {
+    await authFetch(`/users/${d.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ assignedVehicleId: vehicleId || null }),
+    }).catch(() => {});
+    load();
+  };
+
+  const valid = firstName.trim() && lastName.trim() && /^\d{8,10}$/.test(phone.trim()) && /^\d{4,8}$/.test(pin.trim());
+
+  const create = async () => {
+    if (!valid || busy) return;
+    setBusy(true); setErr(null); setOk(null);
+    try {
+      await authFetch('/users', {
+        method: 'POST',
+        body: JSON.stringify({ firstName: firstName.trim(), lastName: lastName.trim(), phone: phone.trim(), pin: pin.trim(), role: 'DRIVER' }),
+      });
+      setOk(`Chauffeur ${firstName} créé. PIN communiqué : ${pin}`);
+      setFirstName(''); setLastName(''); setPhone(''); setPin('');
+      await load();
+    } catch (e: any) {
+      setErr(e?.message === 'Erreur 400' ? 'Téléphone déjà utilisé ou données invalides.' : (e?.message ?? 'Erreur'));
+    } finally { setBusy(false); }
+  };
+
+  const toggleActive = async (d: Driver) => {
+    await authFetch(`/users/${d.id}`, { method: 'PATCH', body: JSON.stringify({ isActive: !d.isActive }) }).catch(() => {});
+    load();
+  };
+  const resetPin = async (d: Driver) => {
+    const np = window.prompt(`Nouveau PIN (4–8 chiffres) pour ${d.firstName} ${d.lastName} :`);
+    if (!np) return;
+    if (!/^\d{4,8}$/.test(np)) { alert('Le PIN doit contenir 4 à 8 chiffres.'); return; }
+    await authFetch(`/users/${d.id}/pin`, { method: 'PATCH', body: JSON.stringify({ pin: np }) })
+      .then(() => alert('PIN réinitialisé.')).catch((e) => alert(e?.message ?? 'Erreur'));
+  };
+
+  return (
+    <div style={st.liveGrid}>
+      <div style={st.card}>
+        <h3 style={st.h3}>Nouveau chauffeur</h3>
+        <p style={st.dim}>Le chauffeur se connecte dans l'app mobile (onglet « Chauffeur ») avec son téléphone et son PIN.</p>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <input placeholder="Prénom" value={firstName} onChange={(e) => setFirstName(e.target.value)} style={{ ...st.input, flex: 1 }} />
+          <input placeholder="Nom" value={lastName} onChange={(e) => setLastName(e.target.value)} style={{ ...st.input, flex: 1 }} />
+        </div>
+        <input placeholder="Téléphone (8–10 chiffres)" value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))} inputMode="numeric" style={{ ...st.input, width: '100%', marginTop: 8 }} />
+        <input placeholder="PIN (4–8 chiffres)" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} inputMode="numeric" type="password" style={{ ...st.input, width: '100%', marginTop: 8 }} />
+        {err && <p style={{ color: '#991b1b', fontSize: 13, marginTop: 8 }}>{err}</p>}
+        {ok && <p style={{ color: '#166534', fontSize: 13, marginTop: 8, fontWeight: 700 }}>{ok}</p>}
+        <button onClick={create} disabled={!valid || busy} style={{ ...st.primary, ...((!valid || busy) ? { opacity: 0.5 } : {}) }}>
+          {busy ? '…' : 'Créer le chauffeur'}
+        </button>
+      </div>
+      <div style={st.card}>
+        <h3 style={st.h3}>Chauffeurs ({drivers.length})</h3>
+        {drivers.length === 0 ? <p style={st.dim}>Aucun chauffeur.</p> : drivers.map((d) => (
+          <div key={d.id} style={{ ...st.zoneRow, flexWrap: 'wrap' }}>
+            <span style={{ ...st.dot, background: d.isActive ? '#16a34a' : '#9ca3af' }} />
+            <span style={{ flex: 1, minWidth: 140, fontSize: 13 }}>
+              <strong>{d.firstName} {d.lastName}</strong> <span style={{ color: '#9ca3af' }}>· {d.phone}</span>
+              {!d.isActive && <span style={{ color: '#991b1b', fontWeight: 700 }}> · désactivé</span>}
+            </span>
+            <select
+              value={d.assignedVehicleId ?? ''}
+              onChange={(e) => assignVehicle(d, e.target.value)}
+              style={st.assignSelect}
+              title="Véhicule assigné"
+            >
+              <option value="">— Aucun véhicule —</option>
+              {fleet.filter((v) => v.isActive).map((v) => (
+                <option key={v.id} value={v.id}>{v.number}{v.plate ? ` · ${v.plate}` : ''}</option>
+              ))}
+            </select>
+            <button onClick={() => resetPin(d)} style={st.smallBtn} title="Réinitialiser le PIN">PIN</button>
+            <button onClick={() => toggleActive(d)} style={st.smallBtn}>{d.isActive ? 'Désactiver' : 'Activer'}</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- VEHICLES ---------------- */
+function VehiclesTab() {
+  const [vehicles, setVehicles] = useState<FleetVehicle[]>([]);
+  const [number, setNumber] = useState('');
+  const [plate, setPlate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = () => authFetch<FleetVehicle[]>('/buses').then(setVehicles).catch(() => setVehicles([]));
+  useEffect(() => { load(); }, []);
+
+  const create = async () => {
+    if (!number.trim() || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      await authFetch('/buses', { method: 'POST', body: JSON.stringify({ number: number.trim(), plate: plate.trim() || undefined }) });
+      setNumber(''); setPlate(''); await load();
+    } catch (e: any) {
+      setErr(e?.message === 'Erreur 400' ? 'Ce numéro de véhicule existe déjà.' : (e?.message ?? 'Erreur'));
+    } finally { setBusy(false); }
+  };
+  const toggleActive = async (v: FleetVehicle) => {
+    await authFetch(`/buses/${v.id}`, { method: 'PATCH', body: JSON.stringify({ isActive: !v.isActive }) }).catch(() => {});
+    load();
+  };
+
+  return (
+    <div style={st.liveGrid}>
+      <div style={st.card}>
+        <h3 style={st.h3}>Nouveau véhicule</h3>
+        <p style={st.dim}>Les chauffeurs choisissent un véhicule au début de leur journée.</p>
+        <input placeholder="Numéro / identifiant (ex : TAXI-04)" value={number} onChange={(e) => setNumber(e.target.value)} style={{ ...st.input, width: '100%', marginTop: 10 }} />
+        <input placeholder="Immatriculation (optionnel)" value={plate} onChange={(e) => setPlate(e.target.value)} style={{ ...st.input, width: '100%', marginTop: 8 }} />
+        {err && <p style={{ color: '#991b1b', fontSize: 13, marginTop: 8 }}>{err}</p>}
+        <button onClick={create} disabled={!number.trim() || busy} style={{ ...st.primary, ...((!number.trim() || busy) ? { opacity: 0.5 } : {}) }}>
+          {busy ? '…' : 'Ajouter le véhicule'}
+        </button>
+      </div>
+      <div style={st.card}>
+        <h3 style={st.h3}>Véhicules ({vehicles.length})</h3>
+        {vehicles.length === 0 ? <p style={st.dim}>Aucun véhicule.</p> : vehicles.map((v) => (
+          <div key={v.id} style={st.zoneRow}>
+            <span style={{ ...st.dot, background: v.isActive ? '#16a34a' : '#9ca3af' }} />
+            <span style={{ flex: 1, fontSize: 13 }}>
+              <strong>{v.number}</strong>{v.plate ? <span style={{ color: '#9ca3af' }}> · {v.plate}</span> : null}
+              {!v.isActive && <span style={{ color: '#991b1b', fontWeight: 700 }}> · désactivé</span>}
+            </span>
+            <button onClick={() => toggleActive(v)} style={st.smallBtn}>{v.isActive ? 'Désactiver' : 'Activer'}</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- ZONES ---------------- */
 function ZonesTab({ mapRef }: { mapRef: React.RefObject<MapRef | null> }) {
   const [zones, setZones] = useState<Zone[]>([]);
@@ -433,6 +600,8 @@ const st: Record<string, any> = {
   chipOnRed: { borderColor: '#ef4444', background: '#fef2f2', color: '#991b1b' },
   zoneRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 4px', borderBottom: '1px solid #f3f4f6' },
   del: { border: 'none', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontWeight: 900 },
+  smallBtn: { border: '1px solid #e5e7eb', background: '#fff', borderRadius: 8, padding: '4px 10px', fontSize: 12, fontWeight: 700, color: '#374151', cursor: 'pointer', marginLeft: 6 },
+  assignSelect: { border: '1px solid #e5e7eb', borderRadius: 8, padding: '4px 8px', fontSize: 12, fontWeight: 700, color: '#111827', background: '#fff', cursor: 'pointer', maxWidth: 160 },
   alert: (kind: string) => ({
     display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '7px 12px', borderRadius: 10,
     fontSize: 12, fontWeight: 800,
