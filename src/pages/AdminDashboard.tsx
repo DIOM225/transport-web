@@ -2249,25 +2249,29 @@ export default function AdminDashboard() {
                         {b.isActive ? 'Désactiver' : 'Activer'}
                       </button>
                       <button style={styles.btn('ghost')} onClick={() => { setPinBusId(pinBusId === b.id ? null : b.id); setPinValue(''); }}>
-                        {pinBusId === b.id ? 'Annuler' : 'Changer de tablette'}
+                        {pinBusId === b.id ? 'Annuler' : '🔑 PIN tablette'}
                       </button>
                     </div>
                     {pinBusId === b.id && (
-                      <div style={{ marginTop: 8 }}>
-                        <div style={{ ...styles.small, marginBottom: 6, color: '#6b7280' }}>
-                          Entrez un nouveau code — l'ancienne tablette sera bloquée dès la prochaine tentative de connexion.
+                      <div style={{ marginTop: 8, padding: '10px 12px', background: '#f9fafb', borderRadius: 10, border: '1px solid #e5e7eb' }}>
+                        <div style={{ ...styles.small, marginBottom: 8, color: '#374151', fontWeight: 700 }}>
+                          Définir le code PIN de la tablette de ce bus
+                        </div>
+                        <div style={{ ...styles.small, marginBottom: 8, color: '#6b7280' }}>
+                          La tablette devra entrer ce code pour se connecter. L'ancienne session sera déconnectée immédiatement.
                         </div>
                         <div style={{ display: 'flex', gap: 8 }}>
                           <input
                             style={{ ...styles.input, flex: 1 }}
-                            placeholder="Nouveau code (≥4 chiffres)"
+                            placeholder="Nouveau PIN (4–8 chiffres)"
                             value={pinValue}
-                            onChange={(e) => setPinValue(e.target.value)}
+                            onChange={(e) => setPinValue(e.target.value.replace(/\D/g, ''))}
                             inputMode="numeric"
+                            type="password"
                             maxLength={8}
                           />
                           <button style={styles.btn('primary')} onClick={() => onSetDevicePin(b.id)} disabled={pinLoading || pinValue.trim().length < 4}>
-                            {pinLoading ? '…' : 'Confirmer'}
+                            {pinLoading ? '…' : 'Enregistrer'}
                           </button>
                         </div>
                       </div>
